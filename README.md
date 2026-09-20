@@ -149,6 +149,8 @@ Default models: Gemini `gemini-2.5-flash`, Anthropic `claude-sonnet-5`, OpenAI `
 
 xAI is not a separate backend: it is the OpenAI-compatible backend with `XAI_API_KEY` and the xAI base URL, so it needs the `[openai]` extra and nothing else.
 
+**Verified against live APIs:** Gemini, Anthropic, and xAI. OpenAI is wired and unit-tested against a mocked SDK, but no request has ever been made to the real OpenAI API — treat that path as unproven until you exercise it yourself.
+
 Every provider receives the same consolidation prompt and goes through the same parser, so the supersession invariant (old fact inactive with a `superseded_by` pointer to the new active fact) is enforced identically. If a provider's response cannot be parsed, the dream fails loudly naming the provider and writes nothing. `remagent doctor` reports the active provider, which keys are present (names only), and whether that provider's SDK is installed.
 
 ## 🚀 Quickstart (Python 3.11+)
@@ -340,7 +342,31 @@ Every fact carries provenance (where it came from), a supersession chain (what r
 
 ## 🖥️ Demo Dashboard
 
-The repo contains a web dashboard (Vite + React + Express, `npm run dev`) that visualizes the dream cycle. **It is a demo playground running on seeded, in-memory simulation data** — not a live view of a real RemAgent database. Its Gemini-backed features (consolidation, agent chat) require `GEMINI_API_KEY` and return explicit errors without it. A hosted instance runs on Cloud Run for demo purposes; it resets on redeploy and shares no data with your local installs.
+The repo contains a web dashboard (Vite + React + Express) that visualizes the dream cycle. Run it locally with `npm run dev`. **It is a demo playground running on seeded, in-memory simulation data** — not a live view of a real RemAgent database, and nothing it shows is read from your `memory.db`. Its Gemini-backed features (consolidation, agent chat) require `GEMINI_API_KEY` and return explicit errors without it.
+
+There is no public hosted instance. The dashboard has no authentication of any kind, so exposing it publicly would let anyone spend your LLM quota — run it locally only.
+
+## 🧪 Testing status
+
+What is actually covered, and what is not. These gaps are known and deliberate rather than
+oversights, so they are written down instead of discovered later.
+
+**Covered:** the unit suite runs on every push and mocks each provider at the SDK boundary, so
+all four backends are checked for identical parsing and the same supersession invariant. A
+nightly canary exercises the **real** Gemini API end to end — logging `$40`, then `$52`, and
+asserting the old fact ends inactive with `superseded_by` pointing at the new active fact.
+
+**Known gaps:**
+
+- **Anthropic canary skips.** The nightly workflow has an Anthropic job, but `ANTHROPIC_API_KEY`
+  is not in repo secrets, so it skips cleanly (green, not red) on every run. Anthropic was
+  verified live once by hand; it is not verified continuously.
+- **No OpenAI canary.** The OpenAI path has never been run against the real API at all.
+- **The live-Gemini unit test never runs in CI.** It is gated behind `RUN_LIVE_GEMINI=1`, which CI
+  does not set. The nightly canary covers that path instead, which is why the gate is left alone.
+
+A green suite therefore means "the parsing and supersession logic is sound for every provider,"
+not "every provider has been proven against its live API."
 
 ## 🗺️ Roadmap
 
