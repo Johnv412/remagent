@@ -186,18 +186,26 @@ class TestClaudeIntegrationSuite(unittest.IsolatedAsyncioTestCase):
         )
 
         settings_file = Path(target_dir) / ".claude" / "settings.json"
-        session_start_script = Path(target_dir) / ".claude" / "hooks" / "session_start.sh"
-        stop_script = Path(target_dir) / ".claude" / "hooks" / "stop.sh"
+        session_start_script = Path(target_dir) / ".claude" / "hooks" / "session_start.py"
         prompt_hook = Path(target_dir) / ".claude" / "hooks" / "user_prompt_submit.py"
 
         self.assertTrue(settings_file.exists())
         self.assertTrue(session_start_script.exists())
-        self.assertTrue(stop_script.exists())
         self.assertTrue(prompt_hook.exists())
+
+        # Orphan shell scripts are no longer generated: nothing ever
+        # referenced them, and stop.sh implied a paid dream per session.
+        self.assertFalse((Path(target_dir) / ".claude" / "hooks" / "session_start.sh").exists())
+        self.assertFalse((Path(target_dir) / ".claude" / "hooks" / "stop.sh").exists())
+
+        # Every generated hook script must be valid Python, or it fails
+        # silently at runtime the way the old flat-schema config did.
+        import ast
+        ast.parse(session_start_script.read_text())
+        ast.parse(prompt_hook.read_text())
 
         # Verify executable permissions
         self.assertTrue(os.access(session_start_script, os.X_OK))
-        self.assertTrue(os.access(stop_script, os.X_OK))
         self.assertTrue(os.access(prompt_hook, os.X_OK))
 
         # Check settings.json content
@@ -208,15 +216,37 @@ class TestClaudeIntegrationSuite(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["mcpServers"]["remagent"]["command"], "remagent-mcp")
         self.assertIn("hooks", config)
         self.assertIn("SessionStart", config["hooks"])
-        self.assertIn("Stop", config["hooks"])
         self.assertIn("UserPromptSubmit", config["hooks"])
-        self.assertIn("user_prompt_submit.py", config["hooks"]["UserPromptSubmit"][0]["command"])
+
+        # No Stop -> dream hook: consolidation is a paid LLM call and must not
+        # fire at the end of every session.
+        self.assertNotIn("Stop", config["hooks"])
+
+        # Claude Code requires matcher-group objects. A flat
+        # [{"type": "command", ...}] list parses but never fires — that bug
+        # shipped once and produced hooks that silently did nothing.
+        for event in ("SessionStart", "UserPromptSubmit"):
+            group = config["hooks"][event][0]
+            self.assertIn("hooks", group, f"{event} must use the matcher-group shape")
+            self.assertNotIn("type", group, f"{event} must not use the flat shape")
+            self.assertEqual(group["hooks"][0]["type"], "command")
+
+        # Hook commands must be absolute: hooks do not reliably run from the
+        # repository root.
+        prompt_cmd = config["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        start_cmd = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        self.assertIn("user_prompt_submit.py", prompt_cmd)
+        self.assertIn("session_start.py", start_cmd)
+        for cmd in (prompt_cmd, start_cmd):
+            self.assertNotIn(" .claude/", cmd, "hook path must not be relative")
+            self.assertIn(str(Path(target_dir).resolve()), cmd)
 
         # .gitignore must cover the memory db and markdown mirror: committing
         # agent memory is opt-in (may contain sensitive session content).
         gitignore = (Path(target_dir) / ".gitignore").read_text()
         self.assertIn("workspace_memory.db*", gitignore)
         self.assertIn("workspace_memory_md/", gitignore)
+        self.assertIn("workspace_memory_context.md", gitignore)
         self.assertIn("opt-in", gitignore)
 
         # Check idempotency (including that the .gitignore block is appended once)

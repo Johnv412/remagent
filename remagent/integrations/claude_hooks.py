@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import sys
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -52,6 +53,105 @@ def detect_native_auto_memory(target_dir: str, home: Optional[Path] = None) -> T
     )
 
 
+SESSION_START_TEMPLATE = """#!/usr/bin/env python3
+\"\"\"RemAgent SessionStart hook for Claude Code.
+
+Claude Code truncates hook output to roughly 2KB. A full recall injection is
+far larger, so emitting it directly loses most of the brain silently. This
+hook writes the COMPLETE injection to a file and puts a compact digest plus a
+pointer to that file into the session context.
+
+Fail-soft by contract: a missing brain, a missing binary, or a rules set that
+outgrows the token budget all produce silence and exit 0. A memory fault must
+never block a session.
+\"\"\"
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+DB = os.path.expanduser("__REMAGENT_DB__")
+AGENT = "__REMAGENT_AGENT__"
+CONTEXT_FILE = os.path.expanduser("__REMAGENT_CONTEXT__")
+MAX_TOKENS = "__REMAGENT_MAX_TOKENS__"
+BUDGET = 1800
+NL = chr(10)
+
+
+def _short(text, n):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "\u2026"
+
+
+def main():
+    remagent = shutil.which("remagent")
+    if not remagent or not os.path.exists(DB):
+        return 0
+    base = ["--agent", AGENT, "--db", DB, "--max-tokens", MAX_TOKENS]
+
+    try:
+        full = subprocess.run([remagent, "recall", "--format", "injection"] + base,
+                              capture_output=True, text=True, timeout=60)
+        if full.returncode == 0 and full.stdout.strip():
+            parent = os.path.dirname(CONTEXT_FILE)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(CONTEXT_FILE, "w", encoding="utf-8") as fh:
+                fh.write(full.stdout)
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run([remagent, "recall", "--format", "json"] + base,
+                             capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            return 0
+        data = json.loads(res.stdout)
+    except Exception:
+        return 0
+
+    rules = [r for r in data.get("rules", []) if r.get("is_active", True)]
+    facts = data.get("facts", [])
+    prefs = [r for r in rules if r.get("category") == "user_preference"]
+    p1 = [r for r in rules
+          if r.get("category") != "user_preference" and r.get("priority", 3) <= 1]
+
+    dream = str(data.get("last_dream_at") or "never")[:10]
+    lines = ["[REMAGENT BRAIN | agent=" + AGENT + "] "
+             + str(len(facts)) + " facts, " + str(len(rules))
+             + " rules, last dream " + dream]
+    if prefs:
+        lines.append("OPERATOR PREFERENCES:")
+        for r in prefs:
+            lines.append("- " + _short(r.get("rule", ""), 150))
+
+    footer = ["FULL BRAIN (" + str(len(rules)) + " rules + " + str(len(facts))
+              + " facts): " + CONTEXT_FILE,
+              "Read that file when the task touches systems it describes."]
+    reserved = len(NL.join(footer)) + 2
+
+    if p1:
+        lines.append("CORE DOCTRINE (P1):")
+        for r in p1:
+            cand = "- " + _short(r.get("rule", ""), 95)
+            if len(NL.join(lines)) + len(cand) + reserved > BUDGET:
+                break
+            lines.append(cand)
+
+    lines.extend(footer)
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": NL.join(lines)[:BUDGET],
+    }}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+
+
 def generate_claude_configuration(
     target_dir: str = ".",
     db_path: str = "remagent_memory.db",
@@ -70,9 +170,10 @@ def generate_claude_configuration(
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     settings_path = claude_dir / "settings.json"
-    session_start_hook_path = hooks_dir / "session_start.sh"
-    stop_hook_path = hooks_dir / "stop.sh"
+    session_start_hook_path = hooks_dir / "session_start.py"
     prompt_hook_path = hooks_dir / "user_prompt_submit.py"
+    db_stem = os.path.splitext(os.path.basename(db_path))[0]
+    context_file = str(base_dir / f"{db_stem}_context.md")
 
     settings_content = {
         "mcpServers": {
@@ -81,40 +182,45 @@ def generate_claude_configuration(
                 "args": ["--db", db_path, "--agent", agent_id],
             }
         },
+        # Claude Code expects matcher-group objects here. A flat
+        # [{"type": "command", ...}] list parses but never fires, which is
+        # how earlier scaffolds produced hooks that silently did nothing.
+        # Paths are absolute: hooks do not reliably run from the repo root.
         "hooks": {
             "SessionStart": [
                 {
-                    "type": "command",
-                    "command": f"remagent recall --format injection --agent {agent_id} --db {db_path}",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{sys.executable} {session_start_hook_path}",
+                        }
+                    ]
                 }
             ],
             "UserPromptSubmit": [
                 {
-                    "type": "command",
-                    "command": f'python3 .claude/hooks/user_prompt_submit.py --db "{db_path}"',
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{sys.executable} {prompt_hook_path}",
+                        }
+                    ]
                 }
             ],
-            "Stop": [
-                {
-                    "type": "command",
-                    "command": f"remagent dream --agent {agent_id} --db {db_path} --export-md",
-                }
-            ],
+            # No Stop -> `remagent dream` hook. Consolidation is a paid LLM
+            # call; firing one at the end of every session is expensive and
+            # duplicates scheduled consolidation (launchd/cron). Run
+            # `remagent dream` on a schedule instead.
         },
     }
 
-    session_start_script = f"""#!/bin/bash
-# RemAgent SessionStart Hook for Claude Code
-# Recalls active operational directives and discrete entity facts into Claude's context.
-remagent recall --format injection --agent {agent_id} --db {db_path}
-"""
-
-    stop_script = f"""#!/bin/bash
-# RemAgent Stop / Idle Hook for Claude Code
-# Triggers background REM sleep consolidation to prune noise and extract newly
-# learned facts, then regenerates the human-readable markdown mirror.
-remagent dream --agent {agent_id} --db {db_path} --export-md
-"""
+    session_start_script = (
+        SESSION_START_TEMPLATE
+        .replace("__REMAGENT_DB__", db_path)
+        .replace("__REMAGENT_AGENT__", agent_id)
+        .replace("__REMAGENT_CONTEXT__", context_file)
+        .replace("__REMAGENT_MAX_TOKENS__", "8000")
+    )
 
     prompt_hook_script = f'''#!/usr/bin/env python3
 """RemAgent UserPromptSubmit hook for Claude Code.
@@ -191,7 +297,7 @@ if __name__ == "__main__":
     else:
         results[str(settings_path)] = "skipped (already exists, use --force to overwrite)"
 
-    # Write session_start.sh
+    # Write session_start.py
     if not session_start_hook_path.exists() or force:
         with open(session_start_hook_path, "w", encoding="utf-8") as f:
             f.write(session_start_script)
@@ -208,12 +314,12 @@ if __name__ == "__main__":
     gitignore_path = base_dir / ".gitignore"
     ignore_marker = "# RemAgent local memory"
     db_name = os.path.basename(db_path)
-    db_stem = os.path.splitext(db_name)[0]
     ignore_block = (
         f"\n{ignore_marker} — committing agent memory to git is opt-in;"
         " it may contain sensitive session content\n"
         f"{db_name}*\n"
         f"{db_stem}_md/\n"
+        f"{db_stem}_context.md\n"
     )
     existing_ignore = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
     if ignore_marker in existing_ignore:
@@ -233,16 +339,5 @@ if __name__ == "__main__":
         results[str(prompt_hook_path)] = "created"
     else:
         results[str(prompt_hook_path)] = "skipped (already exists, use --force to overwrite)"
-
-    # Write stop.sh
-    if not stop_hook_path.exists() or force:
-        with open(stop_hook_path, "w", encoding="utf-8") as f:
-            f.write(stop_script)
-        # Make script executable
-        current_perms = os.stat(stop_hook_path).st_mode
-        os.chmod(stop_hook_path, current_perms | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        results[str(stop_hook_path)] = "created"
-    else:
-        results[str(stop_hook_path)] = "skipped (already exists, use --force to overwrite)"
 
     return results

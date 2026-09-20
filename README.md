@@ -245,19 +245,33 @@ By default `init-claude` configures the current repository. To share one memory 
   "mcpServers": {
     "remagent": {
       "command": "remagent-mcp",
-      "args": []
+      "args": ["--db", "<db>", "--agent", "<agent>"]
     }
   },
   "hooks": {
     "SessionStart": [
-      { "type": "command", "command": "remagent recall --format injection" }
+      { "hooks": [ { "type": "command", "command": "<python> <repo>/.claude/hooks/session_start.py" } ] }
     ],
-    "Stop": [
-      { "type": "command", "command": "remagent dream --agent claude_code" }
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "<python> <repo>/.claude/hooks/user_prompt_submit.py" } ] }
     ]
   }
 }
 ```
+
+Three details matter, and each one was a real bug:
+
+- **Matcher-group shape.** Claude Code expects `[{ "hooks": [ ... ] }]`. A flat
+  `[{ "type": "command", ... }]` list parses without error but never fires.
+- **Absolute paths.** Hooks do not reliably run from the repository root, so a
+  relative `.claude/hooks/...` command silently fails to resolve.
+- **No `Stop` hook.** Consolidation is a paid LLM call. Firing one at the end of
+  every session is expensive and duplicates scheduled consolidation — run
+  `remagent dream` from launchd or cron instead.
+
+`SessionStart` writes the full recall injection to `<db_stem>_context.md` and puts
+a compact digest plus a pointer to that file into the session, because Claude Code
+truncates hook output to roughly 2KB — well under a real brain's size.
 
 ### Exposed MCP Tools
 
