@@ -21,7 +21,7 @@ from remagent.governor import TokenBudgetGovernor
 from remagent.decay import MemoryDecayEngine
 from remagent.integrations.hermes import HermesMemoryConnector, RemAgentTool
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __all__ = [
     "Fact",
     "OperationalRule",
