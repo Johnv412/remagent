@@ -206,13 +206,20 @@ class GeminiBackend(_Backend):
 
     def generate(self, system_prompt, user_prompt, schema_model, json_schema) -> str:
         client = self._get_client()
+        # Send a sanitised schema, not the Pydantic model. google-genai rejects
+        # any `default` in a response schema, and the model carries four of
+        # them, so passing it directly fails before the request leaves.
+        # Imported here to keep this module free of a prompting dependency at
+        # import time.
+        from remagent.engine.prompting import gemini_response_schema
+
         response = client.models.generate_content(
             model=self.model,
             contents=user_prompt,
             config={
                 "system_instruction": system_prompt,
                 "response_mime_type": "application/json",
-                "response_schema": schema_model,
+                "response_schema": gemini_response_schema(),
             },
         )
         return response.text

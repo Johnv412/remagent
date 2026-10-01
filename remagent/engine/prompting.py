@@ -7,6 +7,7 @@ parser into the same DreamSynthesisOutput type. Provider-specific code lives
 in remagent.engine.providers and never touches prompt text or parsing.
 """
 
+import copy
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -161,6 +162,82 @@ def dream_output_json_schema() -> Dict[str, Any]:
     schema = DreamSynthesisOutput.model_json_schema()
     _strictify(schema)
     return schema
+
+
+# Keys the Gemini response-schema transformer understands. Everything else is
+# dropped rather than passed through: google-genai raises outright on `default`,
+# and silently ignoring unknown keys is how a schema ends up "valid" while
+# meaning something different from what we intended.
+_GEMINI_SCHEMA_KEYS = frozenset({
+    "type", "format", "description", "nullable", "enum",
+    "items", "properties", "required", "anyOf",
+})
+
+
+def _inline_refs(node: Any, defs: Dict[str, Any]) -> Any:
+    """Replace every $ref with its definition.
+
+    Gemini is given a self-contained schema. The SDK can resolve $defs, but
+    inlining keeps what we send identical to what we can assert on in tests.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if ref:
+            name = ref.rsplit("/", 1)[-1]
+            if name not in defs:
+                raise DreamSynthesisError(
+                    f"gemini schema build failed: unresolved $ref {ref!r}"
+                )
+            return _inline_refs(copy.deepcopy(defs[name]), defs)
+        return {k: _inline_refs(v, defs) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_inline_refs(v, defs) for v in node]
+    return node
+
+
+def _gemini_prune(node: Any) -> Any:
+    """Keep only Gemini-supported keys, and require every property.
+
+    Requiring all properties matters precisely because the defaults are gone:
+    if the model may omit `confidence`, a dream can come back structurally
+    valid but missing the number we rely on. Asking for every field keeps the
+    output deterministic across providers.
+    """
+    if isinstance(node, dict):
+        out: Dict[str, Any] = {}
+        for key, value in node.items():
+            if key not in _GEMINI_SCHEMA_KEYS:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                # The keys here are field names, not schema keywords — prune
+                # the sub-schemas but never the names themselves.
+                out[key] = {name: _gemini_prune(sub) for name, sub in value.items()}
+            elif key == "required" and isinstance(value, list):
+                out[key] = list(value)
+            else:
+                out[key] = _gemini_prune(value)
+        if out.get("type") == "object" and isinstance(out.get("properties"), dict):
+            out["required"] = list(out["properties"].keys())
+        return out
+    if isinstance(node, list):
+        return [_gemini_prune(v) for v in node]
+    return node
+
+
+def gemini_response_schema() -> Dict[str, Any]:
+    """The response schema sent to Gemini.
+
+    Derived from DreamSynthesisOutput rather than written by hand, so adding a
+    field to the model carries through here automatically instead of drifting.
+
+    Why this exists: passing the Pydantic model directly as `response_schema`
+    sends its field defaults along, and google-genai rejects any default with
+    "Default value is not supported in the response schema for the Gemini API."
+    That broke every dream from 2026-09-27 until this fix.
+    """
+    schema = DreamSynthesisOutput.model_json_schema()
+    defs = schema.pop("$defs", {})
+    return _gemini_prune(_inline_refs(schema, defs))
 
 
 def _strip_code_fence(text: str) -> str:
