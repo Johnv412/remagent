@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, Field
 
 from remagent.engine.errors import DreamSynthesisError
-from remagent.schemas import MemoryProfile, RawTurnLog
+from remagent.schemas import Fact, MemoryProfile, OperationalRule, RawTurnLog
 
 
 class SynthesizedFact(BaseModel):
@@ -101,9 +101,55 @@ Return the result strictly structured as valid JSON matching the required schema
 """
 
 
+# Caps on how much of the existing graph travels with a dream. The prompt used
+# to carry every active fact and rule, which grows without bound: at 1,971
+# facts and 818 rules the request first blew the per-minute token quota and
+# then exceeded Gemini's 1,048,576-token input limit outright, so dreaming
+# became impossible exactly when the backlog was largest.
+#
+# Selection is relevance-first rather than a blind truncation. Contradictions
+# can only arise for entities the new turns actually mention, so every fact
+# matching the window is included; the remainder fills by confidence as useful
+# background.
+MAX_CONTEXT_FACTS = 400
+MAX_CONTEXT_RULES = 200
+
+
+def select_context_facts(
+    facts: List[Fact], turns_text: str, limit: int = MAX_CONTEXT_FACTS
+) -> Tuple[List[Fact], int]:
+    """Active facts worth sending with this window, plus the number omitted."""
+    active = [f for f in facts if f.is_active]
+    if len(active) <= limit:
+        return active, 0
+    haystack = turns_text.lower()
+    relevant, background = [], []
+    for fact in active:
+        if fact.entity.lower() in haystack or fact.attribute.lower() in haystack:
+            relevant.append(fact)
+        else:
+            background.append(fact)
+    background.sort(key=lambda f: f.confidence, reverse=True)
+    selected = (relevant + background)[:limit]
+    return selected, len(active) - len(selected)
+
+
+def select_context_rules(
+    rules: List[OperationalRule], limit: int = MAX_CONTEXT_RULES
+) -> Tuple[List[OperationalRule], int]:
+    """Active rules worth sending, highest priority first, plus omitted count."""
+    active = [r for r in rules if r.is_active]
+    if len(active) <= limit:
+        return active, 0
+    ranked = sorted(active, key=lambda r: (r.priority, len(r.rule)))
+    return ranked[:limit], len(active) - limit
+
+
 def build_user_prompt(
     unconsolidated_turns: List[RawTurnLog],
     existing_profile: MemoryProfile,
+    max_context_facts: int = MAX_CONTEXT_FACTS,
+    max_context_rules: int = MAX_CONTEXT_RULES,
 ) -> Tuple[str, int]:
     """
     Render the user-turn prompt every backend sends. Returns the prompt and the
@@ -117,11 +163,49 @@ def build_user_prompt(
         turn_history_str.append(line)
         raw_char_count += len(turn.content)
 
-    existing_facts_str = json.dumps([f.model_dump() for f in existing_profile.facts if f.is_active], indent=2)
-    existing_rules_str = json.dumps([r.model_dump() for r in existing_profile.rules if r.is_active], indent=2)
     turns_block = "\n".join(turn_history_str)
 
-    user_prompt = f"""
+    context_facts, facts_omitted = select_context_facts(
+        existing_profile.facts, turns_block, max_context_facts
+    )
+    context_rules, rules_omitted = select_context_rules(
+        existing_profile.rules, max_context_rules
+    )
+    # Send only the fields the model reads. A full model_dump carries
+    # source_turn_ids — up to one UUID per turn in the window that produced the
+    # fact — which dominated the payload while contributing nothing the model
+    # uses to extract, compare or supersede.
+    existing_facts_str = json.dumps(
+        [
+            {
+                "entity": f.entity,
+                "attribute": f.attribute,
+                "value": f.value,
+                "confidence": round(f.confidence, 2),
+            }
+            for f in context_facts
+        ],
+        indent=2,
+    )
+    existing_rules_str = json.dumps(
+        [{"category": r.category, "rule": r.rule, "priority": r.priority} for r in context_rules],
+        indent=2,
+    )
+
+    # Say plainly that this is a subset. Without it the model can read an
+    # absent entity as "never recorded" and re-introduce it under a new name,
+    # which is the entity drift the prompt works hard to prevent.
+    scope_note = ""
+    if facts_omitted or rules_omitted:
+        scope_note = (
+            f"\nNOTE: the graph below is the subset most relevant to these turns "
+            f"({len(context_facts)} of {len(context_facts) + facts_omitted} active facts, "
+            f"{len(context_rules)} of {len(context_rules) + rules_omitted} active rules). "
+            f"An entity you cannot see here may still exist — do not assume absence, "
+            f"and do not rename or duplicate an entity merely because it is not listed.\n"
+        )
+
+    user_prompt = f"""{scope_note}
 ### EXISTING CONSOLIDATED KNOWLEDGE GRAPH (ACTIVE FACTS):
 {existing_facts_str}
 
