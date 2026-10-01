@@ -232,14 +232,32 @@ class DreamDaemon:
                         )
 
                 # 6. Update or append operational rules
-                existing_rule_map = {r.rule.lower(): r for r in profile.rules}
+                # The map is updated as we go, not just seeded once. A single
+                # dream can return the same rule many times — one on
+                # 2026-09-26 emitted 430 rules containing roughly 32 copies
+                # each of a dozen texts — and seeding the map only from the
+                # existing profile let every repeat inside that batch through.
+                # Matching is on normalised text so trivial whitespace or case
+                # differences do not read as a new rule.
+                def _rule_key(text: str) -> str:
+                    return " ".join(str(text).lower().split())
+
+                existing_rule_map = {_rule_key(r.rule): r for r in profile.rules}
                 for new_rule in result.updated_rules:
-                    if new_rule.rule.lower() in existing_rule_map:
-                        existing_rule_map[new_rule.rule.lower()].priority = new_rule.priority
-                        existing_rule_map[new_rule.rule.lower()].rationale = new_rule.rationale
-                        existing_rule_map[new_rule.rule.lower()].updated_at = current_utc_iso()
+                    key = _rule_key(new_rule.rule)
+                    existing = existing_rule_map.get(key)
+                    if existing is not None:
+                        # Re-asserting a rule refreshes it rather than cloning
+                        # it; the record keeps its original id so anything
+                        # referring to it still resolves.
+                        existing.priority = new_rule.priority
+                        existing.rationale = new_rule.rationale
+                        existing.updated_at = current_utc_iso()
+                        if not existing.is_active:
+                            existing.is_active = True
                     else:
                         profile.rules.append(new_rule)
+                        existing_rule_map[key] = new_rule
 
                 # 7. Update profile metadata
                 profile.total_pruned_turns += result.pruned_noise_count
