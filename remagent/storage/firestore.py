@@ -54,11 +54,17 @@ class FirestoreStorageAdapter(StorageAdapter):
         """Verifies Firestore client initialization."""
         await self._get_client()
 
-    async def save_turn(self, turn: RawTurnLog) -> None:
+    async def save_turn(self, turn: RawTurnLog) -> bool:
         db = await self._get_client()
         doc_ref = db.collection(self.turns_collection).document(turn.turn_id)
         data = turn.model_dump()
-        await doc_ref.set(data)
+        try:
+            await doc_ref.create(data)  # fails if the document exists: a retried log never overwrites
+        except Exception as exc:  # google.api_core.exceptions.AlreadyExists, without importing the SDK here
+            if type(exc).__name__ == "AlreadyExists" or "already exists" in str(exc).lower():
+                return False
+            raise
+        return True
 
     async def get_unconsolidated_turns(
         self, session_id: Optional[str] = None, limit: int = 100
