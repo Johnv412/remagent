@@ -98,10 +98,10 @@ class SQLiteStorageAdapter(StorageAdapter):
                 file=sys.stderr,
             )
 
-    def _sync_save_turn(self, turn: RawTurnLog) -> None:
+    def _sync_save_turn(self, turn: RawTurnLog) -> bool:
         with self._get_connection() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO raw_turns (
+            cur = conn.execute("""
+                INSERT OR IGNORE INTO raw_turns (
                     turn_id, session_id, role, content, tool_calls_json, metadata_json, timestamp, is_consolidated
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """, (
@@ -115,10 +115,11 @@ class SQLiteStorageAdapter(StorageAdapter):
                 1 if turn.is_consolidated else 0,
             ))
             conn.commit()
+            return cur.rowcount == 1  # 0 = a row with this turn_id already existed and was left alone
 
-    async def save_turn(self, turn: RawTurnLog) -> None:
+    async def save_turn(self, turn: RawTurnLog) -> bool:
         async with self._lock:
-            await asyncio.to_thread(self._sync_save_turn, turn)
+            return await asyncio.to_thread(self._sync_save_turn, turn)
 
     def _sync_get_unconsolidated_turns(self, session_id: Optional[str], limit: int) -> List[RawTurnLog]:
         with self._get_connection() as conn:

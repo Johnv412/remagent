@@ -7,6 +7,7 @@ parser into the same DreamSynthesisOutput type. Provider-specific code lives
 in remagent.engine.providers and never touches prompt text or parsing.
 """
 
+from ..sensitive import redact
 import copy
 import json
 from typing import Any, Dict, List, Tuple
@@ -159,7 +160,8 @@ def build_user_prompt(
     raw_char_count = 0
     for idx, turn in enumerate(unconsolidated_turns, 1):
         tool_info = f" [Tools: {json.dumps(turn.tool_calls)}]" if turn.tool_calls else ""
-        line = f"Turn #{idx} [{turn.timestamp}] (ID: {turn.turn_id}) Role: {turn.role.upper()} => {turn.content}{tool_info}"
+        safe_content = redact(turn.content)[0]  # rows written before 1.1.2 were not scanned on the way in
+        line = f"Turn #{idx} [{turn.timestamp}] (ID: {turn.turn_id}) Role: {turn.role.upper()} => {safe_content}{tool_info}"
         turn_history_str.append(line)
         raw_char_count += len(turn.content)
 

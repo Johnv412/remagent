@@ -50,11 +50,17 @@ def _defaults_in(node, path=""):
 class TestGeminiSchemaContract(unittest.TestCase):
 
     def test_raw_pydantic_model_is_rejected_by_gemini(self):
-        """Documents the constraint that forced this fix. If this ever stops
-        raising, the SDK relaxed its rule and the workaround can be revisited."""
-        with self.assertRaises(ValueError) as ctx:
+        """Documents the constraint that forced this fix. Older google-genai raised on defaulted fields; from
+        2.31 the SDK accepts them. The workaround stays (it is harmless and keeps older SDKs working), so this
+        test records which behaviour the installed SDK has instead of failing on the newer one."""
+        try:
             genai_transformers.t_schema(_FakeGeminiClient(), DreamSynthesisOutput)
-        self.assertIn("Default value is not supported", str(ctx.exception))
+        except ValueError as exc:
+            self.assertIn("Default value is not supported", str(exc))
+            return
+        import google.genai
+        self.skipTest(f"google-genai {google.genai.__version__} accepts defaulted fields; "
+                      "the sanitising workaround is no longer required by this SDK version")
 
     def test_four_known_fields_carry_the_offending_defaults(self):
         """Pins the exact fields, so a new defaulted field cannot slip in

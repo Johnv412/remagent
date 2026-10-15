@@ -6,7 +6,7 @@
 
 A zero-vector, local-first shared brain: the same consolidated memory, reachable from Claude Code, Gemini-powered agents, Hermes, any MCP host, or plain CLI. Modeled on biological sleep / REM memory consolidation.
 
-[![CI](https://github.com/Johnv412/rem-agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Johnv412/rem-agent-/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/remagent)](https://pypi.org/project/remagent/)
+[![CI](https://github.com/Johnv412/remagent/actions/workflows/ci.yml/badge.svg)](https://github.com/Johnv412/remagent/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/remagent)](https://pypi.org/project/remagent/)
 
 ---
 
@@ -124,7 +124,7 @@ pip install "remagent[claude]"
 pip install "remagent[firestore]"
 ```
 
-Or from source: `git clone https://github.com/Johnv412/rem-agent-.git && cd rem-agent- && pip install -e ".[claude]"`
+Or from source: `git clone https://github.com/Johnv412/remagent.git && cd remagent && pip install -e ".[claude]"`
 
 ### Choose an LLM provider — four keys, pick one
 
@@ -378,7 +378,7 @@ not "every provider has been proven against its live API."
 
 ## 👤 Maintainer
 
-Built by **John Vincent** ([@Johnv412](https://github.com/Johnv412)) — JV.AI Systems. I build production AI voice and automation systems for service businesses; RemAgent is the memory layer extracted from that work. Issues and PRs welcome.
+Built by **John Vincent Vallario** ([@Johnv412](https://github.com/Johnv412)) — JV.AI Systems. I build production AI voice and automation systems for service businesses; RemAgent is the memory layer extracted from that work. Issues and PRs welcome.
 
 Built with Claude Code.
 

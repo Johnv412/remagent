@@ -38,6 +38,7 @@ Contract:
     /reset, say) does not double-log the same session into memory.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -138,26 +139,41 @@ def main() -> int:
         marker.write_text("empty\n", encoding="utf-8")
         return 0
 
-    logged = 0
-    for text in prompts:
+    # Every prompt gets a stable turn id from (session, position, text). remagent log stores an id once and reports
+    # "duplicate" after that, so a rerun after a partial failure skips what already landed and never double-logs.
+    logged = duplicates = 0
+    failed = False
+    for index, text in enumerate(prompts):
+        turn_id = "hermes-" + hashlib.sha256(f"{session_id}\n{index}\n{text}".encode("utf-8")).hexdigest()[:32]
         try:
             proc = subprocess.run(
-                [remagent, "log", "--role", "user", "--session", session_id,
-                 "--db", db, "--content-file", "-"],
+                [remagent, "log", "--role", "user", "--session", session_id, "--turn-id", turn_id,
+                 "--json", "--db", db, "--content-file", "-"],
                 input=text, capture_output=True, text=True, timeout=LOG_TIMEOUT,
             )
         except Exception as exc:
             note(f"remagent log failed: {exc}")
+            failed = True
             break
         if proc.returncode != 0:
             note(f"remagent log exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+            failed = True
             break
+        try:
+            status = json.loads((proc.stdout or "").strip().splitlines()[-1]).get("status")
+        except (ValueError, IndexError):
+            status = "saved"  # an older remagent without --json still exits 0 only on success
+        if status == "duplicate":
+            duplicates += 1
         logged += 1
 
-    if logged:
+    if not failed and logged == len(prompts):
+        # Done means EVERY prompt landed. A partial run leaves no marker, so the next finalize retries it and the
+        # stable turn ids turn the already-saved prompts into harmless duplicates.
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(f"{logged}\n", encoding="utf-8")
-    note(f"session {session_id}: logged {logged}/{len(prompts)} user prompt(s) into {db}")
+    note(f"session {session_id}: logged {logged}/{len(prompts)} user prompt(s) ({duplicates} already stored) into {db}"
+         + ("; INCOMPLETE, will retry on the next finalize" if failed or logged != len(prompts) else ""))
     return 0
 
 

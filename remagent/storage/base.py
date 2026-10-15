@@ -25,9 +25,11 @@ class StorageAdapter(ABC):
         pass
 
     @abstractmethod
-    async def save_turn(self, turn: RawTurnLog) -> None:
-        """Append a raw interaction turn to the unconsolidated buffer."""
-        pass
+    async def save_turn(self, turn: RawTurnLog) -> bool:
+        """Append a raw interaction turn to the unconsolidated buffer.
+        Returns True when the turn was stored now, False when a turn with this turn_id already existed (the stored
+        row is left untouched: a retried log never overwrites or resets consolidation)."""
+        return True
 
     @abstractmethod
     async def get_unconsolidated_turns(
