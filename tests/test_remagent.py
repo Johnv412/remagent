@@ -110,11 +110,13 @@ class TestRemAgentSuite(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Prefer dark mode", injection)
         self.assertNotIn("TOKEN BUDGET OVERFLOW", injection)
 
-    def test_token_budget_governor_rules_overflow_raises_loudly(self):
-        # Rules are NEVER trimmed. If they alone exceed the budget, the
-        # governor must refuse loudly — a rule-less injection is worse than
-        # no injection.
-        governor = TokenBudgetGovernor(default_max_tokens=80)
+    def test_large_rule_set_is_bounded_not_refused(self):
+        # A big rule set used to make recall refuse outright, so every session
+        # lost its memory the moment the brain grew. Recall now selects within
+        # the budget and states what it left out.
+        # 20 rules at ~42 tokens each is ~840 tokens of rules against a
+        # 300-token budget, so most must be left out and said so.
+        governor = TokenBudgetGovernor(default_max_tokens=300)
         rules = [
             OperationalRule(
                 id=f"r{i}",
@@ -123,13 +125,25 @@ class TestRemAgentSuite(unittest.IsolatedAsyncioTestCase):
                 rationale="",
                 priority=1,
             )
-            for i in range(6)
+            for i in range(20)
         ]
         profile = MemoryProfile(agent_id="overflow_test", facts=[], rules=rules)
 
-        with self.assertRaises(GovernorBudgetError) as ctx:
-            governor.build_budgeted_prompt_injection(profile, max_tokens=80)
-        self.assertIn("never trimmed", str(ctx.exception))
+        injection = governor.build_budgeted_prompt_injection(profile, max_tokens=300)
+        self.assertTrue(injection.strip(), "recall must never come back silently empty")
+        self.assertLessEqual(governor.estimate_tokens(injection), 300)
+        self.assertIn("rule(s) omitted by token budget", injection)
+        self.assertIn("of 20 shown", injection)
+        self.assertIn("OPERATIONAL RULES", injection, "at least one rule must survive")
+
+    def test_budget_too_small_for_anything_still_raises(self):
+        # The loud failure is reserved for a misconfigured budget, not a big brain.
+        governor = TokenBudgetGovernor()
+        rules = [OperationalRule(id="r1", category="operational_directive",
+                                 rule="x" * 400, rationale="", priority=1)]
+        profile = MemoryProfile(agent_id="tiny_budget", facts=[], rules=rules)
+        with self.assertRaises(GovernorBudgetError):
+            governor.build_budgeted_prompt_injection(profile, max_tokens=5)
 
     def test_token_budget_governor_all_rules_present_facts_truncated(self):
         # All rules (every priority) must appear; facts fill what's left and
@@ -200,26 +214,30 @@ class TestRemAgentSuite(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Created a NEW EMPTY database", second.stderr,
                          "notice must only fire when the file is actually new")
 
-    async def test_recall_cli_rules_overflow_exits_nonzero(self):
+    async def test_recall_cli_succeeds_with_a_large_rule_set(self):
+        """Recall must keep working as the brain grows. It previously exited 1
+        once the rules alone exceeded the budget, which is how a 744-rule brain
+        silently stopped reaching any session."""
         rules = [
             OperationalRule(id=f"r{i}", category="operational_directive",
-                            rule=f"Long critical directive {i}: " + ("y" * 150),
-                            rationale="", priority=1)
-            for i in range(5)
+                            rule=f"Directive {i}: " + ("y" * 300), rationale="", priority=1)
+            for i in range(40)
         ]
         await self.storage.save_memory_profile(
             MemoryProfile(agent_id="overflow_agent", rules=rules)
         )
+        await self.storage.close()
+
         args = ["remagent", "recall", "--format", "injection", "--agent", "overflow_agent",
-                "--db", self.db_path, "--max-tokens", "40"]
+                "--db", self.db_path, "--max-tokens", "2000"]
         proc = subprocess.run(
             [sys.executable, "-c",
              f"import sys; sys.argv = {args!r}; from remagent.cli import main; main()"],
             capture_output=True, text=True, timeout=60,
         )
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("FAILED", proc.stderr)
-        self.assertIn("never trimmed", proc.stderr)
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("REMAGENT DETERMINISTIC MEMORY CONTEXT", proc.stdout)
+        self.assertIn("rule(s) omitted by token budget", proc.stdout)
 
     def test_memory_decay_engine(self):
         decay_engine = MemoryDecayEngine(half_life_days=1.0, min_confidence_floor=0.3)
