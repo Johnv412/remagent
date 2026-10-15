@@ -52,10 +52,17 @@ BACKEND_FOR_PROVIDER = {
 # Default chat models, verified in-session (2026-09-06) against provider docs
 # and the installed SDK model literals. See the provider report for sources.
 DEFAULT_MODELS = {
-    "gemini": "gemini-2.5-flash",
+    "gemini": "gemini-3.8-flash",
     "anthropic": "claude-sonnet-5",   # claude-opus-5 available via REMAGENT_MODEL
     "openai": "gpt-6-astra",
     "xai": "grok-4.6",
+}
+
+# Tried once if the default model fails outright. Only applies to the code
+# default: a model the operator set via REMAGENT_MODEL is never swapped behind
+# their back. Mirrors Dream Engine, which records fallback_from on the audit row.
+FALLBACK_MODELS = {
+    "gemini": "gemini-2.5-flash",
 }
 
 SDK_MODULE = {"gemini": "google.genai", "anthropic": "anthropic", "openai": "openai"}
@@ -75,6 +82,7 @@ class ProviderConfig:
     model: str
     key_env: str             # name of the env var the key came from (never the value)
     base_url: Optional[str] = None
+    fallback_model: Optional[str] = None   # set only when `model` is the code default
 
 
 def _gemini_key(env: Mapping[str, str]) -> Optional[tuple]:
@@ -131,7 +139,9 @@ def resolve_provider(env: Optional[Mapping[str, str]] = None) -> ProviderConfig:
             raise NoProviderKeyError(f"no LLM API key found; {_KEY_HINT}")
 
     key_env, api_key = hit
-    model = (env.get("REMAGENT_MODEL") or "").strip() or DEFAULT_MODELS[provider]
+    explicit_model = (env.get("REMAGENT_MODEL") or "").strip()
+    model = explicit_model or DEFAULT_MODELS[provider]
+    fallback = None if explicit_model else FALLBACK_MODELS.get(provider)
     base_url: Optional[str] = None
     if provider == "xai":
         base_url = XAI_BASE_URL
@@ -145,6 +155,7 @@ def resolve_provider(env: Optional[Mapping[str, str]] = None) -> ProviderConfig:
         model=model,
         key_env=key_env,
         base_url=base_url,
+        fallback_model=fallback,
     )
 
 
@@ -153,6 +164,7 @@ def legacy_gemini_config(api_key: str, model: Optional[str] = None) -> ProviderC
     return ProviderConfig(
         provider="gemini", backend="gemini", api_key=api_key,
         model=model or DEFAULT_MODELS["gemini"], key_env="api_key",
+        fallback_model=None if model else FALLBACK_MODELS.get("gemini"),
     )
 
 
