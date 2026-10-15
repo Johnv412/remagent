@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "RemAgent Core Team", email = "architect@dreamengine.dev" }
+    { name = "John Vincent Vallario", email = "johnvallario412@gmail.com" }
 ]
 keywords = [
     "ai-agents",
@@ -83,6 +83,6 @@ remagent = "remagent.cli:main"
 remagent-mcp = "remagent.integrations.claude_code:main"
 
 [project.urls]
-Homepage = "https://dreamengine.dev"
-Repository = "https://github.com/Johnv412/rem-agent-"
-Documentation = "https://remagent.dev"
+Homepage = "https://github.com/Johnv412/remagent"
+Repository = "https://github.com/Johnv412/remagent"
+Documentation = "https://github.com/Johnv412/remagent"
