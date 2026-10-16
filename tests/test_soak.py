@@ -125,10 +125,11 @@ class TestSoakVerdict(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)
         self.assertIn("no organic contradiction", report)
 
-    async def test_complete_rules_overflow_fails_with_named_reason(self):
-        """If the rules alone bust the default budget, the soak must fail
-        loudly with the governor's reason — never pass on a rule-less
-        injection."""
+    async def test_complete_large_rule_set_passes_with_trim_noted(self):
+        """A brain big enough to outgrow the budget is a healthy brain, not a
+        failed soak. Recall is bounded now, so the soak must pass and say what
+        was trimmed instead of refusing. It should still fail on an empty
+        injection, which is a different thing entirely."""
         from remagent.schemas import OperationalRule
         rules = [
             OperationalRule(id=f"r{i}", category="operational_directive",
@@ -155,9 +156,10 @@ class TestSoakVerdict(unittest.IsolatedAsyncioTestCase):
         self.write_config()
         self.write_log([snapshot_line(f"2026-08-{d}") for d in range(25, 32)])
         code, report = run_soak_report(config_path=self.cfg_path, today="2026-09-01")
-        self.assertEqual(code, 1)
-        self.assertIn("cannot be built", report)
-        self.assertIn("never trimmed", report)
+        self.assertEqual(code, 0, msg=report)
+        self.assertIn("within budget", report)
+        self.assertIn("trimmed to fit", report)
+        self.assertNotIn("cannot be built", report)
 
     async def test_complete_bad_snapshot_fails_with_check_named(self):
         await self.seed_passing_memory()

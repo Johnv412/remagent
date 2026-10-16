@@ -6,7 +6,7 @@
 
 A zero-vector, local-first shared brain: the same consolidated memory, reachable from Claude Code, Gemini-powered agents, Hermes, any MCP host, or plain CLI. Modeled on biological sleep / REM memory consolidation.
 
-[![CI](https://github.com/Johnv412/rem-agent-/actions/workflows/ci.yml/badge.svg)](https://github.com/Johnv412/rem-agent-/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/remagent)](https://pypi.org/project/remagent/)
+[![CI](https://github.com/Johnv412/remagent/actions/workflows/ci.yml/badge.svg)](https://github.com/Johnv412/remagent/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/remagent)](https://pypi.org/project/remagent/)
 
 ---
 
@@ -124,7 +124,7 @@ pip install "remagent[claude]"
 pip install "remagent[firestore]"
 ```
 
-Or from source: `git clone https://github.com/Johnv412/rem-agent-.git && cd rem-agent- && pip install -e ".[claude]"`
+Or from source: `git clone https://github.com/Johnv412/remagent.git && cd remagent && pip install -e ".[claude]"`
 
 ### Choose an LLM provider — four keys, pick one
 
@@ -145,7 +145,7 @@ With no `REMAGENT_PROVIDER` set, RemAgent auto-detects the first key present in 
 | `REMAGENT_MODEL` | Override the selected provider's default model (e.g. `claude-opus-5`, `gpt-5.5`, `grok-4.5`, `gemini-2.5-pro`). |
 | `OPENAI_BASE_URL` | Point the `openai` provider at any OpenAI-compatible server (Ollama, vLLM, LM Studio, a proxy). Applies to `openai` only — `xai` is always `https://api.x.ai/v1`. |
 
-Default models: Gemini `gemini-2.5-flash`, Anthropic `claude-sonnet-5`, OpenAI `gpt-6-astra`, xAI `grok-4.6`. Set `REMAGENT_MODEL=claude-opus-5` (or any other model id) to override.
+Default models: Gemini `gemini-3.8-flash` (falls back once to `gemini-2.5-flash` if the default fails outright), Anthropic `claude-sonnet-5`, OpenAI `gpt-6-astra`, xAI `grok-4.6`. The fallback applies only to the code default — a model you set with `REMAGENT_MODEL` is never swapped. Set `REMAGENT_MODEL=claude-opus-5` (or any other model id) to override.
 
 xAI is not a separate backend: it is the OpenAI-compatible backend with `XAI_API_KEY` and the xAI base URL, so it needs the `[openai]` extra and nothing else.
 
@@ -378,7 +378,7 @@ not "every provider has been proven against its live API."
 
 ## 👤 Maintainer
 
-Built by **John Vincent** ([@Johnv412](https://github.com/Johnv412)) — JV.AI Systems. I build production AI voice and automation systems for service businesses; RemAgent is the memory layer extracted from that work. Issues and PRs welcome.
+Built by **John Vincent Vallario** ([@Johnv412](https://github.com/Johnv412)) — JV.AI Systems. I build production AI voice and automation systems for service businesses; RemAgent is the memory layer extracted from that work. Issues and PRs welcome.
 
 Built with Claude Code.
 

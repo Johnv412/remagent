@@ -96,6 +96,10 @@ class DreamConsolidationResult(BaseModel):
     estimated_token_savings: int = Field(default=0, description="Estimated prompt token overhead eliminated vs raw history")
     is_fallback: bool = Field(default=False, description="True if this result was NOT produced by a real, successful synthesis call; such results must never be persisted")
     error: Optional[str] = Field(default=None, description="Error message when the consolidation run failed; None on success")
+    # Which model actually produced this dream, and — if the code default
+    # failed and the configured fallback produced it — the model first tried.
+    model_name: Optional[str] = None
+    fallback_from: Optional[str] = None
 
 
 class MemoryProfile(BaseModel):

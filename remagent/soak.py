@@ -11,7 +11,8 @@ Machine-gradable criteria (from docs/SOAK_CRITERIA.md):
       passes with a warning, <5 is insufficient evidence).
   C2  at least one organic contradiction was resolved since the baseline,
       and the superseded facts all have active replacements.
-  C3  the recall injection fits the token budget with no overflow marker.
+  C3  the recall injection builds, is non-empty, and fits the token budget.
+      Trimming is expected once the brain is large; it is reported, not failed.
 The final criterion — "would this injection genuinely help a fresh
 session?" — is John's judgment; the report prints the injection and says
 so rather than pretending a script can grade usefulness.
@@ -154,9 +155,16 @@ def run_soak_report(
             problems.append(f"the recall injection cannot be built — {exc}")
         else:
             tokens = governor.estimate_tokens(injection) if injection else 0
-            lines.append(f"   Injection: ~{tokens} tokens, ALL rules included, within budget.")
+            n_rules = injection.count("\n- [")
+            n_facts = injection.count(" (conf: ")
+            lines.append(
+                f"   Injection: ~{tokens} tokens, {n_rules} rule(s) + {n_facts} fact(s), within budget."
+            )
             if "omitted by token budget" in injection:
-                lines.append("   (some lower-priority facts trimmed to fit — acceptable and noted in the injection)")
+                lines.append("   (lower-priority items trimmed to fit — expected at scale and "
+                             "stated in the injection itself)")
+            if not injection.strip():
+                problems.append("the recall injection came back empty")
     except Exception as exc:
         problems.append(f"could not build the recall injection: {exc}")
 

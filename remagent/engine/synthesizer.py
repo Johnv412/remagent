@@ -126,6 +126,35 @@ class DreamSynthesizer:
         transient_names = ("Timeout", "ConnectionError", "ConnectionReset", "ServiceUnavailable", "DeadlineExceeded")
         return any(name in type(exc).__name__ for name in transient_names)
 
+    async def _generate_and_parse(self, backend, provider: str, user_prompt: str, json_schema):
+        """One model call with bounded retries for transient faults, then the
+        shared parse. Any failure surfaces as DreamSynthesisError so the caller
+        can decide about a fallback model; parse errors are never retried."""
+        raw_text = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                raw_text = backend.generate(DREAM_PROMPT_SYSTEM, user_prompt, DreamSynthesisOutput, json_schema)
+                break
+            except DreamSynthesisError:
+                raise
+            except Exception as exc:
+                if attempt < self.max_attempts and self._is_transient_error(exc):
+                    delay = self.retry_backoff_seconds * attempt
+                    logger.warning(
+                        "Transient %s error on attempt %d/%d: %s — retrying in %.1fs",
+                        provider, attempt, self.max_attempts, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("Dream synthesis failed; no memory will be written: %s", exc, exc_info=True)
+                raise DreamSynthesisError(f"{provider} dream synthesis failed: {exc}") from exc
+
+        try:
+            return parse_dream_output(raw_text, provider)
+        except DreamSynthesisError as exc:
+            logger.error("%s; no memory will be written", exc, exc_info=True)
+            raise
+
     # -- consolidation -------------------------------------------------------
 
     async def consolidate_window(
@@ -157,33 +186,32 @@ class DreamSynthesizer:
         user_prompt, raw_char_count = build_user_prompt(unconsolidated_turns, existing_profile)
         json_schema = dream_output_json_schema()
 
-        # One call with structured JSON output. Transient transport errors get
-        # a bounded retry with backoff; anything else — and any retry
-        # exhaustion — fails loudly. Parse errors are never retried.
-        raw_text = None
-        for attempt in range(1, self.max_attempts + 1):
-            try:
-                raw_text = backend.generate(DREAM_PROMPT_SYSTEM, user_prompt, DreamSynthesisOutput, json_schema)
-                break
-            except DreamSynthesisError:
-                raise
-            except Exception as exc:
-                if attempt < self.max_attempts and self._is_transient_error(exc):
-                    delay = self.retry_backoff_seconds * attempt
-                    logger.warning(
-                        "Transient %s error on attempt %d/%d: %s — retrying in %.1fs",
-                        provider, attempt, self.max_attempts, exc, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                logger.error("Dream synthesis failed; no memory will be written: %s", exc, exc_info=True)
-                raise DreamSynthesisError(f"{provider} dream synthesis failed: {exc}") from exc
+        primary_model = backend.model
+        fallback_model = self._resolve_config().fallback_model
+        fallback_from: Optional[str] = None
 
         try:
-            parsed = parse_dream_output(raw_text, provider)
-        except DreamSynthesisError as exc:
-            logger.error("%s; no memory will be written", exc, exc_info=True)
-            raise
+            parsed = await self._generate_and_parse(backend, provider, user_prompt, json_schema)
+        except DreamSynthesisError as primary_exc:
+            if not fallback_model or fallback_model == primary_model:
+                raise
+            # The code default failed outright — model retired, rejected, or
+            # returned nothing usable. Try the configured fallback once, and
+            # say so loudly. An operator-set REMAGENT_MODEL never reaches here
+            # (resolve_provider leaves fallback_model unset for it).
+            logger.warning(
+                "%s dream on default model %r failed (%s); retrying once on fallback %r",
+                provider, primary_model, primary_exc, fallback_model,
+            )
+            backend.model = fallback_model
+            try:
+                parsed = await self._generate_and_parse(backend, provider, user_prompt, json_schema)
+            except DreamSynthesisError as fallback_exc:
+                raise DreamSynthesisError(
+                    f"{provider} dream synthesis failed on default model {primary_model!r} "
+                    f"({primary_exc}) and on fallback {fallback_model!r} ({fallback_exc})"
+                ) from fallback_exc
+            fallback_from = primary_model
 
         # Map to domain entities
         turn_ids = [t.turn_id for t in unconsolidated_turns]
@@ -241,4 +269,6 @@ class DreamSynthesizer:
             consolidated_turn_ids=turn_ids,
             timestamp=current_utc_iso(),
             estimated_token_savings=estimated_token_savings,
+            model_name=backend.model,
+            fallback_from=fallback_from,
         )
