@@ -77,6 +77,10 @@ async def run_cli():
              "--content for long transcripts, which can exceed the OS argument limit.",
     )
     log_parser.add_argument("--session", default="default_session", help="Session ID")
+    log_parser.add_argument("--turn-id", default=None,
+                            help="Optional stable id for this turn. Logging the same id twice stores it once "
+                                 "(insert-or-ignore; the first copy is never overwritten).")
+    log_parser.add_argument("--json", action="store_true", help="Print one JSON line: {status, turn_id, ...}")
     log_parser.add_argument("--db", default=_default_db(), help="SQLite database path (env: REMAGENT_DB)")
 
     # Command: export
@@ -133,7 +137,7 @@ async def run_cli():
             print(f"   • {path}: {status}")
         print("\n✨ Claude Code is now wired to RemAgent memory!")
         print("   - SessionStart hook: Pre-loads active rules & knowledge into context.")
-        print("   - Stop hook: Runs background REM sleep consolidation when work completes.")
+        print("   - UserPromptSubmit hook: Logs each of your prompts as a raw turn (run `remagent dream` to consolidate).")
         print("   - MCP server: Exposes remagent_recall, remagent_log, and remagent_dream tools.")
         if native_state == "disabled":
             print(f"\nℹ️  Native Claude Code auto-memory appears DISABLED ({native_detail}).")
@@ -212,7 +216,18 @@ async def run_cli():
         synthesizer = DreamSynthesizer(provider=provider, backend=backend)
 
     storage = SQLiteStorageAdapter(db_path=args.db)
-    await storage.initialize()
+    try:
+        await storage.initialize()
+    except Exception as exc:
+        if args.command == "log":  # the log command promises one of: saved, duplicate, failed
+            if getattr(args, "json", False):
+                print(json.dumps({"status": "failed", "turn_id": getattr(args, "turn_id", None),
+                                  "error": f"cannot open {args.db}: {type(exc).__name__}: {exc}"}))
+            else:
+                print(f"❌ FAILED: cannot open {args.db}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                print("   Nothing was logged.", file=sys.stderr)
+            sys.exit(1)
+        raise
 
     try:
         if args.command == "dream":
@@ -336,9 +351,27 @@ async def run_cli():
                 print("💤 Nothing to log: content was empty.")
                 return
 
-            turn = RawTurnLog(session_id=args.session, role=args.role, content=content)
-            await storage.save_turn(turn)
-            print(f"📥 Logged raw turn {turn.turn_id} to buffer.")
+            turn_kwargs = {"session_id": args.session, "role": args.role, "content": content}
+            if args.turn_id:
+                turn_kwargs["turn_id"] = args.turn_id.strip()
+            turn = RawTurnLog(**turn_kwargs)
+            redacted = turn.content != content
+            try:
+                stored = await storage.save_turn(turn)
+            except Exception as exc:
+                if args.json:
+                    print(json.dumps({"status": "failed", "turn_id": turn.turn_id, "error": f"{type(exc).__name__}: {exc}"}))
+                else:
+                    print(f"❌ FAILED: turn {turn.turn_id} was NOT saved: {type(exc).__name__}: {exc}", file=sys.stderr)
+                sys.exit(1)
+            status = "saved" if stored else "duplicate"
+            if args.json:
+                print(json.dumps({"status": status, "turn_id": turn.turn_id, "session_id": turn.session_id,
+                                  "secrets_redacted": redacted}))
+            elif stored:
+                print(f"✅ saved: turn {turn.turn_id}" + (" (secrets redacted before saving)" if redacted else ""))
+            else:
+                print(f"↩️  duplicate: turn {turn.turn_id} was already stored; nothing changed.")
     finally:
         await storage.close()
 

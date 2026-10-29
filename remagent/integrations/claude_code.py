@@ -94,8 +94,10 @@ def create_claude_mcp_server(
         session_id: str = "claude_code",
         agent_id: str = default_agent_id,
         db_path: str = default_db_path,
+        turn_id: str = "",
     ) -> str:
-        """Log a conversational or tool execution turn into the episodic buffer."""
+        """Log a conversational or tool execution turn into the episodic buffer.
+        turn_id (optional): a stable id; logging the same id twice stores it once and reports "duplicate"."""
         valid_roles = ["user", "assistant", "system", "tool"]
         normalized_role = role.lower()
         if normalized_role not in valid_roles:
@@ -107,14 +109,14 @@ def create_claude_mcp_server(
         storage = SQLiteStorageAdapter(db_path=db_path)
         await storage.initialize()
         try:
-            turn = RawTurnLog(
-                session_id=session_id,
-                role=normalized_role,  # type: ignore
-                content=content,
-            )
-            await storage.save_turn(turn)
+            turn_kwargs = {"session_id": session_id, "role": normalized_role, "content": content}
+            if turn_id:
+                turn_kwargs["turn_id"] = str(turn_id).strip()
+            turn = RawTurnLog(**turn_kwargs)  # type: ignore[arg-type]
+            stored = await storage.save_turn(turn)
             response_data = {
-                "status": "logged",
+                "status": "logged" if stored else "duplicate",
+                "secrets_redacted": turn.content != content,
                 "turn_id": turn.turn_id,
                 "session_id": session_id,
                 "role": normalized_role,

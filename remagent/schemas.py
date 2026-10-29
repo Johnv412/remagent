@@ -4,7 +4,7 @@ Pydantic schemas for the RemAgent autonomous zero-vector memory framework.
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uuid
 
 
@@ -77,6 +77,17 @@ class RawTurnLog(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary context metadata (tokens, latency, etc.)")
     timestamp: Union[str, float] = Field(default_factory=current_utc_iso, description="Turn recording timestamp")
     is_consolidated: bool = Field(default=False, description="Whether this turn has been processed by a dream cycle")
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _hide_secrets(cls, value: Any) -> Any:
+        """Secret hiding (remagent/sensitive.py): keys, tokens, passwords and card numbers never enter the buffer."""
+        if isinstance(value, str) and value:
+            from .sensitive import redact
+            clean, found = redact(value)
+            if found:
+                return clean
+        return value
 
 
 class DreamConsolidationResult(BaseModel):
