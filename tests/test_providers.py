@@ -170,7 +170,16 @@ class TestProviderSelection(unittest.TestCase):
         self.assertEqual(resolve_provider({"ANTHROPIC_API_KEY": "a"}).model, "claude-sonnet-5")
         self.assertEqual(resolve_provider({"OPENAI_API_KEY": "o"}).model, "gpt-6-astra")
         self.assertEqual(resolve_provider({"XAI_API_KEY": "x"}).model, "grok-4.6")
-        self.assertEqual(resolve_provider({"GEMINI_API_KEY": "g"}).model, "gemini-2.5-flash")
+        self.assertEqual(resolve_provider({"GEMINI_API_KEY": "g"}).model, "gemini-3.8-flash")
+
+    def test_gemini_default_carries_fallback_but_explicit_model_does_not(self):
+        """The fallback exists to survive a retired default. An operator who set
+        REMAGENT_MODEL chose deliberately and must never be swapped silently."""
+        default = resolve_provider({"GEMINI_API_KEY": "g"})
+        self.assertEqual(default.fallback_model, "gemini-2.5-flash")
+        explicit = resolve_provider({"GEMINI_API_KEY": "g", "REMAGENT_MODEL": "gemini-3.8-pro"})
+        self.assertIsNone(explicit.fallback_model)
+        self.assertIsNone(resolve_provider({"ANTHROPIC_API_KEY": "a"}).fallback_model)
 
     def test_remagent_model_overrides_default(self):
         cfg = resolve_provider({"ANTHROPIC_API_KEY": "a", "REMAGENT_MODEL": "claude-opus-5"})

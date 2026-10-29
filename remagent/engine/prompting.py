@@ -160,7 +160,7 @@ def build_user_prompt(
     raw_char_count = 0
     for idx, turn in enumerate(unconsolidated_turns, 1):
         tool_info = f" [Tools: {json.dumps(turn.tool_calls)}]" if turn.tool_calls else ""
-        safe_content = redact(turn.content)[0]  # rows written before 1.1.2 were not scanned on the way in
+        safe_content = redact(turn.content)[0]  # rows written before 1.1.3 were not scanned on the way in
         line = f"Turn #{idx} [{turn.timestamp}] (ID: {turn.turn_id}) Role: {turn.role.upper()} => {safe_content}{tool_info}"
         turn_history_str.append(line)
         raw_char_count += len(turn.content)

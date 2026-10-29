@@ -1,4 +1,4 @@
-"""Secret hiding for logged turns (pre-launch, 1.1.2).
+"""Secret hiding for logged turns (1.1.3).
 
 Every turn is scanned for API keys, tokens, passwords, private-key blocks and payment-card numbers BEFORE it is
 saved, and again when it is rendered into a dream prompt (so rows written by older versions are covered too).

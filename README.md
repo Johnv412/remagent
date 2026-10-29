@@ -72,7 +72,7 @@ RemAgent mimics mammalian memory consolidation:
 [Agent Awake] ──> Logs raw episodic turns (user, tools, LLM) into a buffer
                        │
                        ▼  (idle timer or scheduled trigger — see Dream Modes)
-[Dream Daemon] ──> Wakes in background (zero latency to the active user)
+[Dream Daemon] ──> Wakes in background (never blocks the active session)
                        │
                        ├─► 1. NOISE PRUNING          (discards ephemeral tool traces, chatter)
                        ├─► 2. FACT EXTRACTION         (builds an entity-attribute graph)
@@ -80,7 +80,7 @@ RemAgent mimics mammalian memory consolidation:
                        └─► 4. OPERATIONAL HEURISTICS   (extracts durable directives)
                        │
                        ▼
-[Structured Memory Graph]  (zero-vector, deterministic — SQLite or Firestore)
+[Structured Memory Graph]  (zero-vector, deterministic — local SQLite)
                        │
                        ▼  (next session / next query)
 [Agent Recall] ──> Deterministic memory injection into the prompt, within token budget
@@ -145,7 +145,7 @@ With no `REMAGENT_PROVIDER` set, RemAgent auto-detects the first key present in 
 | `REMAGENT_MODEL` | Override the selected provider's default model (e.g. `claude-opus-5`, `gpt-5.5`, `grok-4.5`, `gemini-2.5-pro`). |
 | `OPENAI_BASE_URL` | Point the `openai` provider at any OpenAI-compatible server (Ollama, vLLM, LM Studio, a proxy). Applies to `openai` only — `xai` is always `https://api.x.ai/v1`. |
 
-Default models: Gemini `gemini-2.5-flash`, Anthropic `claude-sonnet-5`, OpenAI `gpt-6-astra`, xAI `grok-4.6`. Set `REMAGENT_MODEL=claude-opus-5` (or any other model id) to override.
+Default models: Gemini `gemini-3.8-flash` (falls back once to `gemini-2.5-flash` if the default fails outright), Anthropic `claude-sonnet-5`, OpenAI `gpt-6-astra`, xAI `grok-4.6`. The fallback applies only to the code default — a model you set with `REMAGENT_MODEL` is never swapped. Set `REMAGENT_MODEL=claude-opus-5` (or any other model id) to override.
 
 xAI is not a separate backend: it is the OpenAI-compatible backend with `XAI_API_KEY` and the xAI base URL, so it needs the `[openai]` extra and nothing else.
 
@@ -238,7 +238,7 @@ pip install "remagent[claude]"
 remagent init-claude
 ```
 
-By default `init-claude` configures the current repository. To share one memory across every Claude Code session on the machine, install the hooks globally (see docs) so all projects write to the same store.
+By default `init-claude` configures the current repository. To share one memory across every Claude Code session on the machine, put the same `hooks` block in your user-level `~/.claude/settings.json` instead of the repo's `.claude/settings.json`, pointing at one database path — then every project writes to the same store. Don't keep both, or each prompt is logged twice.
 
 ### What init-claude configures
 
@@ -351,7 +351,7 @@ There is no public hosted instance. The dashboard has no authentication of any k
 What is actually covered, and what is not. These gaps are known and deliberate rather than
 oversights, so they are written down instead of discovered later.
 
-**Covered:** the unit suite runs on every push and mocks each provider at the SDK boundary, so
+**Covered:** the unit suite runs on every push to `main` and on every pull request, and mocks each provider at the SDK boundary, so
 all four backends are checked for identical parsing and the same supersession invariant. A
 nightly canary exercises the **real** Gemini API end to end — logging `$40`, then `$52`, and
 asserting the old fact ends inactive with `superseded_by` pointing at the new active fact.

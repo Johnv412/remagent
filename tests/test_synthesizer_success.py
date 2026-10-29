@@ -192,7 +192,8 @@ class TestSynthesizerSuccessPath(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.added_facts), 1)
 
     async def test_persistent_transient_failure_exhausts_and_raises(self):
-        s = DreamSynthesizer(api_key="test-key", retry_backoff_seconds=0.0)
+        # Explicit model: retry semantics on one model, no fallback in play.
+        s = DreamSynthesizer(api_key="test-key", model_name="gemini-2.5-flash", retry_backoff_seconds=0.0)
         models = _FlakyModels(failures=99, text="{}")
         s._client = _FakeClientWithModels(models)
 
@@ -204,7 +205,8 @@ class TestSynthesizerSuccessPath(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(models.calls, 3, "must stop after max_attempts, never loop forever")
 
     async def test_non_transient_error_is_never_retried(self):
-        s = DreamSynthesizer(api_key="test-key", retry_backoff_seconds=0.0)
+        # Explicit model: retry semantics on one model, no fallback in play.
+        s = DreamSynthesizer(api_key="test-key", model_name="gemini-2.5-flash", retry_backoff_seconds=0.0)
         models = _FlakyModels(failures=99, text="{}", exc_factory=lambda: ValueError("bad request schema"))
         s._client = _FakeClientWithModels(models)
 
@@ -214,6 +216,63 @@ class TestSynthesizerSuccessPath(unittest.IsolatedAsyncioTestCase):
                 existing_profile=MemoryProfile(agent_id="a"),
             )
         self.assertEqual(models.calls, 1, "non-transient errors fail immediately")
+
+    # ------------------------------------------------------------------
+    # Fallback model: only for the code default, tried once, recorded
+    # ------------------------------------------------------------------
+
+    async def test_default_model_falls_back_once_and_records_it(self):
+        """The code default fails outright (non-transient); the configured
+        fallback produces the dream, and the result says which model first
+        tried — mirroring Dream Engine's fallback_from audit column."""
+        from remagent.engine.providers import DEFAULT_MODELS, FALLBACK_MODELS
+        s = DreamSynthesizer(api_key="test-key", retry_backoff_seconds=0.0)
+        models = _FlakyModels(failures=1, text=json.dumps(GEMINI_PAYLOAD),
+                              exc_factory=lambda: ValueError("model not found"))
+        s._client = _FakeClientWithModels(models)
+
+        result = await s.consolidate_window(
+            unconsolidated_turns=[RawTurnLog(role="user", content="x")],
+            existing_profile=MemoryProfile(agent_id="a"),
+        )
+        self.assertEqual(models.calls, 2, "one failed primary call, one fallback call")
+        self.assertEqual(result.fallback_from, DEFAULT_MODELS["gemini"])
+        self.assertEqual(result.model_name, FALLBACK_MODELS["gemini"])
+        self.assertEqual(len(result.added_facts), 1)
+
+    async def test_fallback_failure_raises_naming_both_models(self):
+        s = DreamSynthesizer(api_key="test-key", retry_backoff_seconds=0.0)
+        models = _FlakyModels(failures=99, text="{}", exc_factory=lambda: ValueError("nope"))
+        s._client = _FakeClientWithModels(models)
+        with self.assertRaises(DreamSynthesisError) as ctx:
+            await s.consolidate_window(
+                unconsolidated_turns=[RawTurnLog(role="user", content="x")],
+                existing_profile=MemoryProfile(agent_id="a"),
+            )
+        self.assertEqual(models.calls, 2, "primary once, fallback once, then stop")
+        self.assertIn("gemini-3.8-flash", str(ctx.exception))
+        self.assertIn("gemini-2.5-flash", str(ctx.exception))
+
+    async def test_primary_success_records_no_fallback(self):
+        s = _synthesizer_with_fake(json.dumps(GEMINI_PAYLOAD))
+        result = await s.consolidate_window(
+            unconsolidated_turns=[RawTurnLog(role="user", content="x")],
+            existing_profile=MemoryProfile(agent_id="a"),
+        )
+        self.assertIsNone(result.fallback_from)
+        self.assertEqual(result.model_name, "gemini-3.8-flash")
+
+    async def test_explicit_model_never_falls_back(self):
+        """An operator who set the model chose it deliberately."""
+        s = DreamSynthesizer(api_key="test-key", model_name="gemini-3.8-flash", retry_backoff_seconds=0.0)
+        models = _FlakyModels(failures=99, text="{}", exc_factory=lambda: ValueError("retired"))
+        s._client = _FakeClientWithModels(models)
+        with self.assertRaises(DreamSynthesisError):
+            await s.consolidate_window(
+                unconsolidated_turns=[RawTurnLog(role="user", content="x")],
+                existing_profile=MemoryProfile(agent_id="a"),
+            )
+        self.assertEqual(models.calls, 1, "no silent swap of an explicit model")
 
     @unittest.skipUnless(
         os.environ.get("RUN_LIVE_GEMINI") == "1",
